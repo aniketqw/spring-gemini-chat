@@ -319,7 +319,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- 📧 **Email**: your.email@example.com
+- 📧 **Email**: aniket21stcentury@gmail.com
 - 🐛 **Issues**: [GitHub Issues](https://github.com/aniketqw/spring-gemini-chat/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/aniketqw/spring-gemini-chat/discussions)
 
