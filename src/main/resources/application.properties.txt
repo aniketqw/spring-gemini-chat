@@ -1,0 +1,20 @@
+spring.application.name=p1
+
+# Server Configuration
+server.port=8080
+
+# Gemini AI Configuration
+gemini.api.key=${GEMINI_API_KEY:YOUR_KEY}
+gemini.api.base-url=https://generativelanguage.googleapis.com/v1beta/models
+gemini.api.model=gemini-2.5-flash
+gemini.api.timeout=30000
+
+# Logging
+logging.level.com.example.p1=DEBUG
+logging.level.org.springframework.web=DEBUG
+
+# CORS Configuration
+cors.allowed-origins=http://localhost:3000,http://localhost:8080
+cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+cors.allowed-headers=*
+*/
