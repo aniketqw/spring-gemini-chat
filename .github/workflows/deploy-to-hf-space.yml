@@ -1,0 +1,59 @@
+name: Deploy to Hugging Face Space (Docker)
+
+on:
+  push:
+    branches: [ master ]      # your repo's default branch
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Maven build (sanity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+      - name: Build (skip tests)
+        run: mvn -B -DskipTests package
+
+  sync-to-space:
+    name: Push repo to Hugging Face Space
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Configure Git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Push to Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}          # create this in GitHub repo Settings → Secrets and variables → Actions
+          HF_USERNAME: ${{ vars.HF_USERNAME }}       # create as GitHub "Variables" (or hardcode if you prefer)
+          HF_SPACE: ${{ vars.HF_SPACE }}             # e.g. "spring-gemini-chat" or "org/space"
+        run: |
+          : "${HF_USERNAME:?Set GitHub variable HF_USERNAME}"
+          : "${HF_SPACE:?Set GitHub variable HF_SPACE (e.g. spring-gemini-chat or org/space-name)}"
+
+          # Allow HF_SPACE to be either "space" or "org/space"
+          SPACE_PATH="$HF_SPACE"
+          if ! echo "$SPACE_PATH" | grep -q '/'; then
+            SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
+          fi
+
+          # Push current HEAD to Space's 'main' (Spaces use 'main' as default)
+          git push "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}" HEAD:main
