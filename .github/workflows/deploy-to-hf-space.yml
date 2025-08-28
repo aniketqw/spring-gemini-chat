@@ -1,113 +1,106 @@
-name: Deploy to Hugging Face Space (Docker)
+name: Deploy to Hugging Face Space
 
 on:
   push:
-    branches: [ master ]          # change if your default branch differs
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Create Docker Space + push orphan LFS deploy
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}   # HF token with write access
-      HF_USERNAME: Phoenix21              # your HF username/org
-      HF_SPACE: SpringGeminiChat          # Space name
-
+    
     steps:
-      # 0) Checkout repo (full history; not shallow)
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: false
-
-      # 1) Install hub client + Git LFS
-      - name: Install hub client + git-lfs
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install "huggingface_hub>=0.23"
-          sudo apt-get update
-          sudo apt-get install -y git-lfs
-          git lfs install
-
-      # 2) Create Space if missing (SDK = docker)
-      - name: Create Space if missing (SDK = docker)
-        shell: python
-        env:
-          HF_TOKEN: ${{ env.HF_TOKEN }}
-          HF_USERNAME: ${{ env.HF_USERNAME }}
-          HF_SPACE: ${{ env.HF_SPACE }}
-        run: |
-          import os
-          from huggingface_hub import HfApi
-          api = HfApi(token=os.environ["HF_TOKEN"])
-          repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
-          try:
-            api.repo_info(repo_id, repo_type="space")
-            print(f"Space exists: {repo_id}")
-          except Exception:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    - name: Cache Maven dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+        
+    - name: Build with Maven
+      run: mvn clean package -DskipTests
+      
+    - name: Create Dockerfile for Hugging Face
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM openjdk:17-jdk-slim
+        
+        WORKDIR /app
+        
+        # Copy the jar file
+        COPY target/*.jar app.jar
+        
+        # Expose port
+        EXPOSE 7860
+        
+        # Run the application
+        ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+        EOF
+        
+    - name: Create requirements.txt (if needed for HF Space)
+      run: |
+        cat > requirements.txt << 'EOF'
+        # This is a Java Spring Boot application
+        # No Python requirements needed
+        EOF
+        
+    - name: Create app.py for Hugging Face compatibility
+      run: |
+        cat > app.py << 'EOF'
+        import subprocess
+        import os
+        
+        # This is a wrapper to run the Java application on Hugging Face Spaces
+        if __name__ == "__main__":
+            # Set the port environment variable
+            os.environ["SERVER_PORT"] = "7860"
+            
+            # Run the Java application
+            subprocess.run(["java", "-jar", "target/*.jar"], check=True)
+        EOF
+        
+    - name: Deploy to Hugging Face Space
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        # Install huggingface_hub
+        pip install huggingface_hub
+        
+        # Upload files to Hugging Face Space
+        python -c "
+        from huggingface_hub import HfApi
+        import os
+        
+        api = HfApi()
+        
+        # Create or update the space
+        try:
             api.create_repo(
-              repo_id=repo_id,
-              repo_type="space",
-              space_sdk="docker",   # ensure a Docker Space
-              private=False
+                repo_id='${{ secrets.HF_USERNAME }}/spring-gemini-chat',
+                repo_type='space',
+                space_sdk='docker',
+                private=False,
+                token='${{ secrets.HF_TOKEN }}'
             )
-            print(f"Space created: {repo_id}")
-
-      # 3) Build an orphan deploy snapshot with Docker README + LFS
-      - name: Prepare orphan deploy commit (no heredoc; Docker README + LFS)
-        run: |
-          set -euo pipefail
-
-          # Orphan branch so Space won't inherit non-LFS history
-          git checkout --orphan space-deploy
-
-          # Ensure README has Docker Space YAML (sdk + port) WITHOUT heredoc
-          if ! grep -qE '^sdk:\s*docker' README.md 2>/dev/null; then
-            tmp="$(mktemp)"
-            printf '%s\n' '---' 'title: Spring Gemini Chat (Docker)' 'sdk: docker' 'app_port: 7860' '---' '' > "$tmp"
-            [ -f README.md ] && cat README.md >> "$tmp" || true
-            mv "$tmp" README.md
-          fi
-
-          # Track images/binaries with LFS (HF requires LFS for binaries)
-          git lfs track "screenshots/*.png"
-          git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
-          git add .gitattributes
-
-          # Stage EVERYTHING so the Space receives your full repo snapshot
-          git add -A .
-
-          # Optional diagnostics
-          echo "---- git status ----"; git status -s || true
-          echo "---- sample files ----"; git ls-files | head -n 50 || true
-          echo "---- LFS pointers ----"; git lfs ls-files || true
-
-          # Ignore build outputs
-          printf '%s\n' "target/" "*.log" >> .gitignore
-          git add .gitignore
-
-          # Commit the deploy snapshot
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
-          git log --oneline -1
-
-      # 4) Push to Space (force first sync) and verify remote SHA
-      - name: Push to Space (force first sync + verify)
-        run: |
-          set -euo pipefail
-          SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
-          git remote remove space 2>/dev/null || true
-          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
-
-          echo "Local HEAD before push:"; git rev-parse HEAD
-          git push --force space space-deploy:main
-          echo "Remote main after push (new SHA expected):"
-          git ls-remote --heads space refs/heads/main || true
+        except:
+            pass  # Space might already exist
+        
+        # Upload files
+        api.upload_folder(
+            folder_path='.',
+            repo_id='${{ secrets.HF_USERNAME }}/spring-gemini-chat',
+            repo_type='space',
+            token='${{ secrets.HF_TOKEN }}',
+            ignore_patterns=['.git*', '*.md', '.github/']
+        )
+        "
