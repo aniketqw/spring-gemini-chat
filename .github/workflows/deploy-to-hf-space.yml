@@ -72,9 +72,17 @@ jobs:
     - name: Deploy to Hugging Face Space
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_USERNAME: ${{ secrets.HF_USERNAME }}
       run: |
         # Install huggingface_hub
         pip install huggingface_hub
+        
+        # Check if HF_USERNAME is set
+        if [ -z "$HF_USERNAME" ]; then
+          echo "Error: HF_USERNAME secret is not set"
+          echo "Please set HF_USERNAME secret in your repository settings"
+          exit 1
+        fi
         
         # Upload files to Hugging Face Space
         python -c "
@@ -82,25 +90,41 @@ jobs:
         import os
         
         api = HfApi()
+        hf_username = os.environ.get('HF_USERNAME', '').strip()
+        hf_token = os.environ.get('HF_TOKEN', '').strip()
+        
+        if not hf_username:
+            raise ValueError('HF_USERNAME environment variable is not set or empty')
+        if not hf_token:
+            raise ValueError('HF_TOKEN environment variable is not set or empty')
+        
+        repo_id = f'{hf_username}/spring-gemini-chat'
+        print(f'Deploying to: {repo_id}')
         
         # Create or update the space
         try:
             api.create_repo(
-                repo_id='${{ secrets.HF_USERNAME }}/spring-gemini-chat',
+                repo_id=repo_id,
                 repo_type='space',
                 space_sdk='docker',
                 private=False,
-                token='${{ secrets.HF_TOKEN }}'
+                token=hf_token
             )
-        except:
-            pass  # Space might already exist
+            print(f'Created new space: {repo_id}')
+        except Exception as e:
+            print(f'Space might already exist: {e}')
         
         # Upload files
-        api.upload_folder(
-            folder_path='.',
-            repo_id='${{ secrets.HF_USERNAME }}/spring-gemini-chat',
-            repo_type='space',
-            token='${{ secrets.HF_TOKEN }}',
-            ignore_patterns=['.git*', '*.md', '.github/']
-        )
+        try:
+            api.upload_folder(
+                folder_path='.',
+                repo_id=repo_id,
+                repo_type='space',
+                token=hf_token,
+                ignore_patterns=['.git*', '*.md', '.github/', '__pycache__/', '*.pyc']
+            )
+            print(f'Successfully uploaded to: {repo_id}')
+        except Exception as e:
+            print(f'Upload failed: {e}')
+            raise
         "
