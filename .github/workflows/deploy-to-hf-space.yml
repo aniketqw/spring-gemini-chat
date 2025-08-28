@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]      # your repo's default branch
+    branches: [ master ]        # your repo's default branch
   workflow_dispatch:
 
 jobs:
@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # <<< IMPORTANT: unshallow so pushes are allowed
+          lfs: true             # good practice for HF; Space enforces LFS for >10MB
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -18,29 +21,47 @@ jobs:
       - name: Cache Maven
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.m2/repository
+          path: ~/.m2/repository
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-m2-
+          restore-keys: ${{ runner.os }}-m2-
       - name: Build (skip tests)
         run: mvn -B -DskipTests package
 
-      - name: Push to Space (force sync)
+  sync-to-space:
+    name: Push repo to Hugging Face Space
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # <<< IMPORTANT: avoids “shallow update not allowed”
+          lfs: true
+
+      - name: Configure Git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git lfs install --skip-repo
+
+      - name: Push to Space (first sync = force mirror)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}     # HF token with write access
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # create in GitHub repo → Settings → Secrets → Actions
           HF_USERNAME: Phoenix21
           HF_SPACE: SpringGeminiChat
         run: |
           set -euo pipefail
           SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
-      
-          git lfs install --skip-repo
+
+          # add Hugging Face Space as remote with token auth
           git remote remove space 2>/dev/null || true
-          git remote add space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
-      
-          # (Optional) Know remote state; not required for --force
+          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
+
+          # optional: sanity check that repo is *not* shallow anymore
+          echo "is-shallow=$(git rev-parse --is-shallow-repository)"
+
+          # fetch remote once (not required, but nice logs)
           git fetch space main --depth=1 || true
-      
-          # Always mirror GitHub -> Space (first sync must be force)
-          git push --force space HEAD:main
+
+          # IMPORTANT: do a straight forced push for first sync
+          # if your GitHub default branch is 'master', map master -> main on Space:
+          git push --force space master:main
