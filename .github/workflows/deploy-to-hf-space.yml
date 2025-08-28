@@ -6,6 +6,9 @@ on:
       - master
   workflow_dispatch:
 
+env:
+  HF_REPO_ID: Phoenix21/spring-gemini-chat  # Change this to your preferred HF space
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -33,22 +36,34 @@ jobs:
         mkdir -p src/main/resources/static
         mkdir -p src/main/resources/public
         
-        # Copy your index.html to the correct location
+        # Copy your index.html to the correct location and fix API URLs
         if [ -f "src/index.html" ]; then
-          cp src/index.html src/main/resources/static/
-          echo "Copied index.html to static resources"
+          # Replace localhost URLs with relative URLs for Hugging Face Space
+          sed 's|http://localhost:8080/api|/api|g' src/index.html > src/main/resources/static/index.html
+          echo "Copied and fixed index.html API URLs"
         fi
         
-        # Copy any other static files (CSS, JS, images)
+        # Copy and fix any JavaScript files
+        find src -name "*.js" -type f | while read jsfile; do
+          if [ -f "$jsfile" ]; then
+            # Fix API URLs in JS files
+            sed 's|http://localhost:8080/api|/api|g' "$jsfile" > "src/main/resources/static/$(basename "$jsfile")"
+            echo "Fixed API URLs in $(basename "$jsfile")"
+          fi
+        done
+        
+        # Copy and fix any CSS files
+        find src -name "*.css" -type f | while read cssfile; do
+          if [ -f "$cssfile" ]; then
+            cp "$cssfile" "src/main/resources/static/$(basename "$cssfile")"
+            echo "Copied $(basename "$cssfile")"
+          fi
+        done
+        
+        # Copy any other static files
         if [ -d "src/static" ]; then
           cp -r src/static/* src/main/resources/static/ 2>/dev/null || echo "No static directory found"
         fi
-        
-        # Copy any CSS files
-        find src -name "*.css" -exec cp {} src/main/resources/static/ \; 2>/dev/null || echo "No CSS files found"
-        
-        # Copy any JS files  
-        find src -name "*.js" -exec cp {} src/main/resources/static/ \; 2>/dev/null || echo "No JS files found"
         
         # List what we have in static resources
         echo "Static resources:"
@@ -112,33 +127,20 @@ jobs:
       run: |
         python << 'EOF'
         import os
-        from huggingface_hub import HfApi, create_repo
+        from huggingface_hub import HfApi
         from pathlib import Path
         
         # Initialize the API
         api = HfApi()
         token = os.environ.get('HF_TOKEN')
-        repo_id = "Phoenix21/spring-gemini-chat"
+        repo_id = "${{ env.HF_REPO_ID }}"
         
         if not token:
             raise ValueError("HF_TOKEN environment variable is not set")
         
         print(f"Deploying to: {repo_id}")
         
-        try:
-            # Create the space repository
-            create_repo(
-                repo_id=repo_id,
-                repo_type="space",
-                space_sdk="docker",
-                private=False,
-                token=token
-            )
-            print(f"Created space: {repo_id}")
-        except Exception as e:
-            print(f"Space might already exist: {str(e)}")
-        
-        # Upload files
+        # Since the space already exists, we'll just upload files
         try:
             # Upload Dockerfile
             api.upload_file(
@@ -149,6 +151,7 @@ jobs:
                 token=token,
                 commit_message="Update Dockerfile"
             )
+            print("✅ Uploaded Dockerfile")
             
             # Upload README
             api.upload_file(
@@ -159,6 +162,7 @@ jobs:
                 token=token,
                 commit_message="Update README"
             )
+            print("✅ Uploaded README")
             
             # Upload target folder (JAR files)
             api.upload_folder(
@@ -170,11 +174,21 @@ jobs:
                 ignore_patterns=["*.class"],
                 commit_message="Update JAR files"
             )
+            print("✅ Uploaded JAR files")
             
-            print(f"Successfully deployed to: https://huggingface.co/spaces/{repo_id}")
+            print(f"🎉 Successfully deployed to: https://huggingface.co/spaces/{repo_id}")
             
         except Exception as e:
-            print(f"Upload failed: {str(e)}")
+            print(f"❌ Upload failed: {str(e)}")
+            
+            # If upload fails, let's check if the space exists
+            try:
+                space_info = api.space_info(repo_id, token=token)
+                print(f"Space exists: {space_info}")
+            except Exception as space_error:
+                print(f"Space doesn't exist or can't access: {space_error}")
+                print("Please create the space manually at https://huggingface.co/new-space")
+            
             raise
         
         EOF
