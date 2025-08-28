@@ -1,3 +1,13 @@
+---
+title: SpringGeminiChat
+emoji: 🏢
+colorFrom: purple
+colorTo: yellow
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 🤖 Spring Gemini Chat
 
 A modern, reactive Spring Boot application that integrates with Google's Gemini AI to provide intelligent chat capabilities. Built with Spring WebFlux for high-performance, non-blocking operations and featuring a clean, responsive web interface.
