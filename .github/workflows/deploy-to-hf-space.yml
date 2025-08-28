@@ -27,6 +27,33 @@ jobs:
         key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
         restore-keys: ${{ runner.os }}-m2
         
+    - name: Prepare static resources
+      run: |
+        # Create the correct directories for Spring Boot static resources
+        mkdir -p src/main/resources/static
+        mkdir -p src/main/resources/public
+        
+        # Copy your index.html to the correct location
+        if [ -f "src/index.html" ]; then
+          cp src/index.html src/main/resources/static/
+          echo "Copied index.html to static resources"
+        fi
+        
+        # Copy any other static files (CSS, JS, images)
+        if [ -d "src/static" ]; then
+          cp -r src/static/* src/main/resources/static/ 2>/dev/null || echo "No static directory found"
+        fi
+        
+        # Copy any CSS files
+        find src -name "*.css" -exec cp {} src/main/resources/static/ \; 2>/dev/null || echo "No CSS files found"
+        
+        # Copy any JS files  
+        find src -name "*.js" -exec cp {} src/main/resources/static/ \; 2>/dev/null || echo "No JS files found"
+        
+        # List what we have in static resources
+        echo "Static resources:"
+        ls -la src/main/resources/static/ || echo "Static directory is empty"
+        
     - name: Build with Maven
       run: mvn clean package -DskipTests
       
@@ -91,7 +118,7 @@ jobs:
         # Initialize the API
         api = HfApi()
         token = os.environ.get('HF_TOKEN')
-        repo_id = "Phoenix21/spring-gemini-chat"
+        repo_id = "aniketqw/spring-gemini-chat"
         
         if not token:
             raise ValueError("HF_TOKEN environment variable is not set")
