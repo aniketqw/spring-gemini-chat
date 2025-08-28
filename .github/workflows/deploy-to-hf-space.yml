@@ -75,56 +75,79 @@ jobs:
         This application is automatically deployed from the GitHub repository.
         EOF
         
-    - name: Install Hugging Face CLI
+    - name: Install Python dependencies
       run: |
-        pip install huggingface_hub[cli]
+        pip install huggingface_hub
         
-    - name: Login to Hugging Face
+    - name: Deploy to Hugging Face Space
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        echo "${{ secrets.HF_TOKEN }}" | huggingface-cli login --token
+        python << 'EOF'
+        import os
+        from huggingface_hub import HfApi, create_repo
+        from pathlib import Path
         
-    - name: Create or update Hugging Face Space
-      run: |
-        # Try to create the space (will fail if it already exists)
-        huggingface-cli repo create aniketqw/spring-gemini-chat --type space --space_sdk docker || echo "Space already exists"
+        # Initialize the API
+        api = HfApi()
+        token = os.environ.get('HF_TOKEN')
+        repo_id = "Phoenix21/spring-gemini-chat"
         
-    - name: Clone Hugging Face Space repository
-      run: |
-        git clone https://huggingface.co/spaces/aniketqw/spring-gemini-chat hf-space || echo "Repository might not exist yet"
+        if not token:
+            raise ValueError("HF_TOKEN environment variable is not set")
         
-    - name: Setup Hugging Face Space repository
-      run: |
-        # If clone failed, create new directory
-        if [ ! -d "hf-space" ]; then
-          mkdir hf-space
-          cd hf-space
-          git init
-          git remote add origin https://huggingface.co/spaces/aniketqw/spring-gemini-chat
-        else
-          cd hf-space
-        fi
+        print(f"Deploying to: {repo_id}")
         
-        # Configure git
-        git config user.email "action@github.com"
-        git config user.name "GitHub Action"
+        try:
+            # Create the space repository
+            create_repo(
+                repo_id=repo_id,
+                repo_type="space",
+                space_sdk="docker",
+                private=False,
+                token=token
+            )
+            print(f"Created space: {repo_id}")
+        except Exception as e:
+            print(f"Space might already exist: {str(e)}")
         
-        # Copy files
-        cp ../Dockerfile .
-        cp ../README.md .
-        cp -r ../target .
+        # Upload files
+        try:
+            # Upload Dockerfile
+            api.upload_file(
+                path_or_fileobj="Dockerfile",
+                path_in_repo="Dockerfile",
+                repo_id=repo_id,
+                repo_type="space",
+                token=token,
+                commit_message="Update Dockerfile"
+            )
+            
+            # Upload README
+            api.upload_file(
+                path_or_fileobj="README.md",
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                repo_type="space",
+                token=token,
+                commit_message="Update README"
+            )
+            
+            # Upload target folder (JAR files)
+            api.upload_folder(
+                folder_path="target",
+                path_in_repo="target",
+                repo_id=repo_id,
+                repo_type="space",
+                token=token,
+                ignore_patterns=["*.class"],
+                commit_message="Update JAR files"
+            )
+            
+            print(f"Successfully deployed to: https://huggingface.co/spaces/{repo_id}")
+            
+        except Exception as e:
+            print(f"Upload failed: {str(e)}")
+            raise
         
-        # Create .gitignore if it doesn't exist
-        if [ ! -f .gitignore ]; then
-          echo "*.log" > .gitignore
-          echo "*.tmp" >> .gitignore
-        fi
-        
-        # Add and commit files
-        git add .
-        git commit -m "Deploy Spring Boot app from GitHub Actions" || echo "No changes to commit"
-        
-        # Push to Hugging Face
-        git push origin main || git push origin master || echo "Push failed, trying to set upstream"
-        
-        # If push failed, try to set upstream and push
-        git push --set-upstream origin main || git push --set-upstream origin master
+        EOF
