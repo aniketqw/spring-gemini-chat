@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]        # your repo's default branch
+    branches: [ master ]           # change if your default branch is different
   workflow_dispatch:
 
 jobs:
@@ -12,18 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # <<< IMPORTANT: unshallow so pushes are allowed
-          lfs: true             # good practice for HF; Space enforces LFS for >10MB
+          fetch-depth: 0           # full history (no shallow push issues)
+          lfs: true
       - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-      - name: Cache Maven
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2-
       - name: Build (skip tests)
         run: mvn -B -DskipTests package
 
@@ -34,34 +28,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # <<< IMPORTANT: avoids “shallow update not allowed”
+          fetch-depth: 0           # required to avoid "shallow update not allowed"
           lfs: true
-
-      - name: Configure Git
+      - name: Configure Git & LFS
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git lfs install --skip-repo
 
-      - name: Push to Space (first sync = force mirror)
+      - name: Prepare orphan Space commit with LFS for large images
+        run: |
+          set -euo pipefail
+
+          # Create an orphan branch so the Space does NOT inherit your GitHub history.
+          git checkout --orphan space-deploy
+
+          # Track large images with LFS (add more patterns if needed)
+          git lfs track "screenshots/*.png"
+
+          # Convert working tree to respect .gitattributes and LFS rules
+          git add .gitattributes
+          git add --renormalize .
+
+          # Sanity: show which files will be sent via LFS
+          git lfs ls-files || true
+
+          git commit -m "Space deploy: orphan commit with LFS pointers"
+
+      - name: Push to Space (force first sync)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # create in GitHub repo → Settings → Secrets → Actions
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # HF write token
           HF_USERNAME: Phoenix21
           HF_SPACE: SpringGeminiChat
         run: |
           set -euo pipefail
           SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
 
-          # add Hugging Face Space as remote with token auth
+          # Add Space remote
           git remote remove space 2>/dev/null || true
           git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
-          # optional: sanity check that repo is *not* shallow anymore
-          echo "is-shallow=$(git rev-parse --is-shallow-repository)"
-
-          # fetch remote once (not required, but nice logs)
-          git fetch space main --depth=1 || true
-
-          # IMPORTANT: do a straight forced push for first sync
-          # if your GitHub default branch is 'master', map master -> main on Space:
-          git push --force space master:main
+          # Force-push the orphan commit as the Space's main
+          git push --force space HEAD:main
