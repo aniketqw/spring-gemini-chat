@@ -6,9 +6,6 @@ on:
       - master
   workflow_dispatch:
 
-env:
-  HF_USERNAME: aniketqw  # Change this to your actual HF username
-  
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -23,21 +20,38 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
+    - name: Cache Maven dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+        
     - name: Build with Maven
       run: mvn clean package -DskipTests
       
-    - name: Create Dockerfile
+    - name: Create Dockerfile for Hugging Face
       run: |
         cat > Dockerfile << 'EOF'
         FROM openjdk:17-jdk-slim
+        
         WORKDIR /app
+        
+        # Copy the jar file
         COPY target/*.jar app.jar
+        
+        # Expose port
         EXPOSE 7860
+        
+        # Set environment variables
         ENV SERVER_PORT=7860
+        ENV SPRING_PROFILES_ACTIVE=prod
+        
+        # Run the application
         ENTRYPOINT ["java", "-jar", "/app/app.jar"]
         EOF
         
-    - name: Create README.md
+    - name: Create README.md for Hugging Face Space
       run: |
         cat > README.md << 'EOF'
         ---
@@ -50,12 +64,67 @@ jobs:
         ---
         
         # Spring Gemini Chat
-        A Spring Boot application with Google Gemini AI integration.
+        
+        A Spring Boot application integrated with Google Gemini AI for chat functionality.
+        
+        ## Features
+        - Chat with Google Gemini AI
+        - Spring Boot backend
+        - Modern web interface
+        
+        This application is automatically deployed from the GitHub repository.
         EOF
         
-    - name: Deploy to Hugging Face Space
-      uses: huggingface/push-to-hub-action@main
-      with:
-        repo-name: ${{ env.HF_USERNAME }}/spring-gemini-chat
-        repo-type: space
-        hf-token: ${{ secrets.HF_TOKEN }}
+    - name: Install Hugging Face CLI
+      run: |
+        pip install huggingface_hub[cli]
+        
+    - name: Login to Hugging Face
+      run: |
+        echo "${{ secrets.HF_TOKEN }}" | huggingface-cli login --token
+        
+    - name: Create or update Hugging Face Space
+      run: |
+        # Try to create the space (will fail if it already exists)
+        huggingface-cli repo create aniketqw/spring-gemini-chat --type space --space_sdk docker || echo "Space already exists"
+        
+    - name: Clone Hugging Face Space repository
+      run: |
+        git clone https://huggingface.co/spaces/aniketqw/spring-gemini-chat hf-space || echo "Repository might not exist yet"
+        
+    - name: Setup Hugging Face Space repository
+      run: |
+        # If clone failed, create new directory
+        if [ ! -d "hf-space" ]; then
+          mkdir hf-space
+          cd hf-space
+          git init
+          git remote add origin https://huggingface.co/spaces/aniketqw/spring-gemini-chat
+        else
+          cd hf-space
+        fi
+        
+        # Configure git
+        git config user.email "action@github.com"
+        git config user.name "GitHub Action"
+        
+        # Copy files
+        cp ../Dockerfile .
+        cp ../README.md .
+        cp -r ../target .
+        
+        # Create .gitignore if it doesn't exist
+        if [ ! -f .gitignore ]; then
+          echo "*.log" > .gitignore
+          echo "*.tmp" >> .gitignore
+        fi
+        
+        # Add and commit files
+        git add .
+        git commit -m "Deploy Spring Boot app from GitHub Actions" || echo "No changes to commit"
+        
+        # Push to Hugging Face
+        git push origin main || git push origin master || echo "Push failed, trying to set upstream"
+        
+        # If push failed, try to set upstream and push
+        git push --set-upstream origin main || git push --set-upstream origin master
