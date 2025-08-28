@@ -27,33 +27,41 @@ jobs:
         run: mvn -B -DskipTests package
 
   sync-to-space:
-    name: Push repo to Hugging Face Space
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: true
-      - name: Configure Git user
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+        name: Push repo to Hugging Face Space
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+            with:
+              fetch-depth: 0
+              lfs: true
 
-      - name: Push to Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}          # create this in GitHub repo Settings → Secrets and variables → Actions
-          HF_USERNAME: ${{ vars.HF_USERNAME }}       # create as GitHub "Variables" (or hardcode if you prefer)
-          HF_SPACE: ${{ vars.HF_SPACE }}             # e.g. "spring-gemini-chat" or "org/space"
-        run: |
-          : "${HF_USERNAME:?Set GitHub variable HF_USERNAME}"
-          : "${HF_SPACE:?Set GitHub variable HF_SPACE (e.g. spring-gemini-chat or org/space-name)}"
+          - name: Configure Git user
+            run: |
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Allow HF_SPACE to be either "space" or "org/space"
-          SPACE_PATH="$HF_SPACE"
-          if ! echo "$SPACE_PATH" | grep -q '/'; then
-            SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
-          fi
-
-          # Push current HEAD to Space's 'main' (Spaces use 'main' as default)
-          git push "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}" HEAD:main
+          - name: Push to Space (force on first sync)
+            env:
+              HF_TOKEN: ${{ secrets.HF_TOKEN }}            # write token from HF settings
+              HF_USERNAME: Phoenix21                       # or keep using your GitHub variable
+              HF_SPACE: SpringGeminiChat                   # or keep using your GitHub variable
+            run: |
+              set -e
+              SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
+    
+              # add Space as a remote using token auth
+              git lfs install --skip-repo
+              git remote remove space 2>/dev/null || true
+              git remote add space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
+    
+              # try a regular push first
+              set +e
+              git push space HEAD:main
+              rc=$?
+              set -e
+              if [ $rc -ne 0 ]; then
+                echo "Non-fast-forward detected; forcing initial sync to Space main."
+                # safer than --force; refuses if remote moved unexpectedly during the run
+                git push --force-with-lease space HEAD:main
+              fi
