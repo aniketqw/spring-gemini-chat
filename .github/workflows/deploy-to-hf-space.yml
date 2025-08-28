@@ -1,8 +1,8 @@
-name: Deploy to Hugging Face Space (Docker)
+name: Deploy to NEW Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]           # change if your default branch is different
+    branches: [ master ]                 # change if your default branch differs
   workflow_dispatch:
 
 jobs:
@@ -12,8 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0           # full history (no shallow push issues)
-          lfs: true
+          fetch-depth: 0                  # avoid shallow push issues
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -21,52 +20,104 @@ jobs:
       - name: Build (skip tests)
         run: mvn -B -DskipTests package
 
-  sync-to-space:
-    name: Push repo to Hugging Face Space
+  create-and-sync-space:
+    name: Create Docker Space + push orphan LFS deploy
     needs: build
     runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_USERNAME: ${{ vars.HF_USERNAME }}
+      HF_SPACE: ${{ vars.HF_SPACE }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0           # required to avoid "shallow update not allowed"
-          lfs: true
-      - name: Configure Git & LFS
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git lfs install --skip-repo
+          fetch-depth: 0
+          lfs: false
 
-      - name: Prepare orphan Space commit with LFS for large images
+      - name: Install Python deps (huggingface_hub + git-lfs)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "huggingface_hub>=0.23"
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+
+      - name: Create Space if missing (SDK=docker)
+        shell: python
+        env:
+          HF_TOKEN: ${{ env.HF_TOKEN }}
+          HF_USERNAME: ${{ env.HF_USERNAME }}
+          HF_SPACE: ${{ env.HF_SPACE }}
+        run: |
+          import os
+          from huggingface_hub import HfApi, hf_hub_url
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
+          try:
+            api.repo_info(repo_id, repo_type="space")
+            print(f"Space exists: {repo_id}")
+          except Exception:
+            api.create_repo(
+              repo_id=repo_id,
+              repo_type="space",
+              space_sdk="docker",   # ← ensure Docker Space
+              private=False
+            )
+            print(f"Space created: {repo_id}")
+
+      - name: Prepare orphan deploy commit (with Docker README + LFS for images)
         run: |
           set -euo pipefail
 
-          # Create an orphan branch so the Space does NOT inherit your GitHub history.
+          # 1) Make sure Space README has Docker YAML front-matter
+          if ! head -n 1 README.md | grep -q '^---$'; then
+            # Prepend a minimal YAML block if missing
+            tmp="$(mktemp)"
+            cat > "$tmp" <<'YAML'
+---
+title: Spring Gemini Chat (Docker)
+sdk: docker
+app_port: 7860
+---
+YAML
+            cat README.md >> "$tmp"
+            mv "$tmp" README.md
+          fi
+
+          # 2) Start an orphan branch so Space won't inherit your non-LFS history
           git checkout --orphan space-deploy
 
-          # Track large images with LFS (add more patterns if needed)
+          # 3) Track typical image binaries with LFS (add more globs if needed)
           git lfs track "screenshots/*.png"
+          git lfs track "*.png"
+          git lfs track "*.jpg"
+          git lfs track "*.jpeg"
+          git lfs track "*.gif"
+          git lfs track "*.webp"
 
-          # Convert working tree to respect .gitattributes and LFS rules
           git add .gitattributes
+
+          # 4) Renormalize so tracked files become LFS pointers in this commit
           git add --renormalize .
 
-          # Sanity: show which files will be sent via LFS
-          git lfs ls-files || true
+          # 5) Don’t ship build outputs
+          echo -e "target/\n*.log\n" >> .gitignore
+          git add .gitignore
 
-          git commit -m "Space deploy: orphan commit with LFS pointers"
+          # 6) Commit the deploy snapshot
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
 
-      - name: Push to Space (force first sync)
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # HF write token
-          HF_USERNAME: Phoenix21
-          HF_SPACE: SpringGeminiChat
+      - name: Push to NEW Space (force first sync)
         run: |
           set -euo pipefail
           SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
-
-          # Add Space remote
           git remote remove space 2>/dev/null || true
-          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
+          git remote add space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
-          # Force-push the orphan commit as the Space's main
+          # Optional: confirm we have LFS pointers
+          git lfs ls-files || true
+
+          # Push orphan snapshot as Space main (force is OK for first sync)
           git push --force space HEAD:main
