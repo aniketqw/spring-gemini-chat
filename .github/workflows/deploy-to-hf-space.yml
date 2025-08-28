@@ -6,6 +6,9 @@ on:
       - master
   workflow_dispatch:
 
+env:
+  HF_USERNAME: aniketqw  # Change this to your actual HF username
+  
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -20,111 +23,39 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    - name: Cache Maven dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
-        
     - name: Build with Maven
       run: mvn clean package -DskipTests
       
-    - name: Create Dockerfile for Hugging Face
+    - name: Create Dockerfile
       run: |
         cat > Dockerfile << 'EOF'
         FROM openjdk:17-jdk-slim
-        
         WORKDIR /app
-        
-        # Copy the jar file
         COPY target/*.jar app.jar
-        
-        # Expose port
         EXPOSE 7860
-        
-        # Run the application
+        ENV SERVER_PORT=7860
         ENTRYPOINT ["java", "-jar", "/app/app.jar"]
         EOF
         
-    - name: Create requirements.txt (if needed for HF Space)
+    - name: Create README.md
       run: |
-        cat > requirements.txt << 'EOF'
-        # This is a Java Spring Boot application
-        # No Python requirements needed
-        EOF
+        cat > README.md << 'EOF'
+        ---
+        title: Spring Gemini Chat
+        emoji: 🤖
+        colorFrom: blue
+        colorTo: green
+        sdk: docker
+        app_port: 7860
+        ---
         
-    - name: Create app.py for Hugging Face compatibility
-      run: |
-        cat > app.py << 'EOF'
-        import subprocess
-        import os
-        
-        # This is a wrapper to run the Java application on Hugging Face Spaces
-        if __name__ == "__main__":
-            # Set the port environment variable
-            os.environ["SERVER_PORT"] = "7860"
-            
-            # Run the Java application
-            subprocess.run(["java", "-jar", "target/*.jar"], check=True)
+        # Spring Gemini Chat
+        A Spring Boot application with Google Gemini AI integration.
         EOF
         
     - name: Deploy to Hugging Face Space
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        HF_USERNAME: ${{ secrets.HF_USERNAME }}
-      run: |
-        # Install huggingface_hub
-        pip install huggingface_hub
-        
-        # Check if HF_USERNAME is set
-        if [ -z "$HF_USERNAME" ]; then
-          echo "Error: HF_USERNAME secret is not set"
-          echo "Please set HF_USERNAME secret in your repository settings"
-          exit 1
-        fi
-        
-        # Upload files to Hugging Face Space
-        python -c "
-        from huggingface_hub import HfApi
-        import os
-        
-        api = HfApi()
-        hf_username = os.environ.get('HF_USERNAME', '').strip()
-        hf_token = os.environ.get('HF_TOKEN', '').strip()
-        
-        if not hf_username:
-            raise ValueError('HF_USERNAME environment variable is not set or empty')
-        if not hf_token:
-            raise ValueError('HF_TOKEN environment variable is not set or empty')
-        
-        repo_id = f'{hf_username}/spring-gemini-chat'
-        print(f'Deploying to: {repo_id}')
-        
-        # Create or update the space
-        try:
-            api.create_repo(
-                repo_id=repo_id,
-                repo_type='space',
-                space_sdk='docker',
-                private=False,
-                token=hf_token
-            )
-            print(f'Created new space: {repo_id}')
-        except Exception as e:
-            print(f'Space might already exist: {e}')
-        
-        # Upload files
-        try:
-            api.upload_folder(
-                folder_path='.',
-                repo_id=repo_id,
-                repo_type='space',
-                token=hf_token,
-                ignore_patterns=['.git*', '*.md', '.github/', '__pycache__/', '*.pyc']
-            )
-            print(f'Successfully uploaded to: {repo_id}')
-        except Exception as e:
-            print(f'Upload failed: {e}')
-            raise
-        "
+      uses: huggingface/push-to-hub-action@main
+      with:
+        repo-name: ${{ env.HF_USERNAME }}/spring-gemini-chat
+        repo-type: space
+        hf-token: ${{ secrets.HF_TOKEN }}
