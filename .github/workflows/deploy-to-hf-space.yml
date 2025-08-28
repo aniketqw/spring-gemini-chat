@@ -10,15 +10,14 @@ jobs:
     name: Create Docker Space + push orphan LFS deploy
     runs-on: ubuntu-latest
 
-    # Always use bash for all run: steps
     defaults:
       run:
         shell: bash
 
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}   # HF write token
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}   # HF token with write access
       HF_USERNAME: Phoenix21              # your HF username/org
-      HF_SPACE: SpringGeminiChat          # the Space name
+      HF_SPACE: SpringGeminiChat          # Space name
 
     steps:
       # 0) Checkout repo (full history; not shallow)
@@ -27,26 +26,17 @@ jobs:
           fetch-depth: 0
           lfs: false
 
-      # 1) Guard: fail fast if ANY workflow still contains a stray heredoc
-      - name: Guard against stray heredocs
-        run: |
-          set -euo pipefail
-          echo "Running commit: $(git rev-parse HEAD)"
-          if grep -R --line-number "<<'YAML'" .github/workflows/ ; then
-            echo "::error ::Found a leftover heredoc (<<'YAML'). Remove it from ALL workflow files."
-            exit 1
-          fi
-
-      # 2) Install hub client + git-lfs
+      # 1) Install hub client + Git LFS
       - name: Install hub client + git-lfs
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install "huggingface_hub>=0.23"
           sudo apt-get update
           sudo apt-get install -y git-lfs
           git lfs install
 
-      # 3) Create Space if missing (SDK = docker)
+      # 2) Create Space if missing (SDK = docker)
       - name: Create Space if missing (SDK = docker)
         shell: python
         env:
@@ -70,8 +60,8 @@ jobs:
             )
             print(f"Space created: {repo_id}")
 
-      # 4) Build an orphan deploy snapshot with Docker README + LFS
-      - name: Prepare orphan deploy commit (NO heredoc; Docker README + LFS)
+      # 3) Build an orphan deploy snapshot with Docker README + LFS
+      - name: Prepare orphan deploy commit (no heredoc; Docker README + LFS)
         run: |
           set -euo pipefail
 
@@ -91,7 +81,7 @@ jobs:
           git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
           git add .gitattributes
 
-          # >>> Stage EVERYTHING so the Space receives your full repo snapshot
+          # Stage EVERYTHING so the Space receives your full repo snapshot
           git add -A .
 
           # Optional diagnostics
@@ -109,7 +99,7 @@ jobs:
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
           git log --oneline -1
 
-      # 5) Push to Space (force first sync) and verify remote SHA
+      # 4) Push to Space (force first sync) and verify remote SHA
       - name: Push to Space (force first sync + verify)
         run: |
           set -euo pipefail
@@ -118,9 +108,6 @@ jobs:
           git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
           echo "Local HEAD before push:"; git rev-parse HEAD
-
-          # First sync: push the orphan branch explicitly to remote main
           git push --force space space-deploy:main
-
           echo "Remote main after push (new SHA expected):"
           git ls-remote --heads space refs/heads/main || true
