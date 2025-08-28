@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]   # change if your default branch differs
+    branches: [ master ]          # change if your default branch differs
   workflow_dispatch:
 
 jobs:
@@ -10,15 +10,15 @@ jobs:
     name: Create Docker Space + push orphan LFS deploy
     runs-on: ubuntu-latest
 
-    # Always use bash for run steps
+    # Always use bash for all run: steps
     defaults:
       run:
         shell: bash
 
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}     # HF write token
-      HF_USERNAME: Phoenix21                # set to your HF username or org
-      HF_SPACE: SpringGeminiChat            # set to your Space name
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}   # HF write token
+      HF_USERNAME: Phoenix21              # your HF username/org
+      HF_SPACE: SpringGeminiChat          # the Space name
 
     steps:
       # 0) Checkout repo (full history; not shallow)
@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
           lfs: false
 
-      # 1) Guard: fail if ANY workflow still contains a stray heredoc (<<'YAML')
+      # 1) Guard: fail fast if ANY workflow still contains a stray heredoc
       - name: Guard against stray heredocs
         run: |
           set -euo pipefail
@@ -78,16 +78,10 @@ jobs:
           # Orphan branch so Space won't inherit non-LFS history
           git checkout --orphan space-deploy
 
-          # Ensure README has Docker Space YAML (sdk + port)
+          # Ensure README has Docker Space YAML (sdk + port) WITHOUT heredoc
           if ! grep -qE '^sdk:\s*docker' README.md 2>/dev/null; then
             tmp="$(mktemp)"
-            printf '%s\n' \
-'---' \
-'title: Spring Gemini Chat (Docker)' \
-'sdk: docker' \
-'app_port: 7860' \
-'---' \
-'' > "$tmp"
+            printf '%s\n' '---' 'title: Spring Gemini Chat (Docker)' 'sdk: docker' 'app_port: 7860' '---' '' > "$tmp"
             [ -f README.md ] && cat README.md >> "$tmp" || true
             mv "$tmp" README.md
           fi
@@ -101,12 +95,9 @@ jobs:
           git add -A .
 
           # Optional diagnostics
-          echo "---- git status ----"
-          git status -s || true
-          echo "---- sample files staged ----"
-          git ls-files | head -n 50 || true
-          echo "---- LFS pointers ----"
-          git lfs ls-files || true
+          echo "---- git status ----"; git status -s || true
+          echo "---- sample files ----"; git ls-files | head -n 50 || true
+          echo "---- LFS pointers ----"; git lfs ls-files || true
 
           # Ignore build outputs
           printf '%s\n' "target/" "*.log" >> .gitignore
@@ -116,8 +107,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
-
-          echo "HEAD commit:"
           git log --oneline -1
 
       # 5) Push to Space (force first sync) and verify remote SHA
@@ -128,8 +117,7 @@ jobs:
           git remote remove space 2>/dev/null || true
           git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
-          echo "Local HEAD before push:"
-          git rev-parse HEAD
+          echo "Local HEAD before push:"; git rev-parse HEAD
 
           # First sync: push the orphan branch explicitly to remote main
           git push --force space space-deploy:main
