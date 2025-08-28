@@ -2,38 +2,42 @@ name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]                # change if your default branch differs
+    branches: [ master ]   # change if your default branch differs
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Maven build (sanity)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Build (skip tests)
-        run: mvn -B -DskipTests package
-
-  create-and-sync-space:
+  deploy:
     name: Create Docker Space + push orphan LFS deploy
-    needs: build
     runs-on: ubuntu-latest
+
+    # Always use bash for run steps
+    defaults:
+      run:
+        shell: bash
+
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}    # HF write token
-      HF_USERNAME: Phoenix21               # or use GitHub vars
-      HF_SPACE: SpringGeminiChat           # use this or a new space name
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}     # HF write token
+      HF_USERNAME: Phoenix21                # set to your HF username or org
+      HF_SPACE: SpringGeminiChat            # set to your Space name
+
     steps:
+      # 0) Checkout repo (full history; not shallow)
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: false
 
+      # 1) Guard: fail if ANY workflow still contains a stray heredoc (<<'YAML')
+      - name: Guard against stray heredocs
+        run: |
+          set -euo pipefail
+          echo "Running commit: $(git rev-parse HEAD)"
+          if grep -R --line-number "<<'YAML'" .github/workflows/ ; then
+            echo "::error ::Found a leftover heredoc (<<'YAML'). Remove it from ALL workflow files."
+            exit 1
+          fi
+
+      # 2) Install hub client + git-lfs
       - name: Install hub client + git-lfs
         run: |
           python -m pip install --upgrade pip
@@ -42,6 +46,7 @@ jobs:
           sudo apt-get install -y git-lfs
           git lfs install
 
+      # 3) Create Space if missing (SDK = docker)
       - name: Create Space if missing (SDK = docker)
         shell: python
         env:
@@ -60,52 +65,74 @@ jobs:
             api.create_repo(
               repo_id=repo_id,
               repo_type="space",
-              space_sdk="docker",   # <- ensure DOCKER Space
+              space_sdk="docker",   # ensure a Docker Space
               private=False
             )
             print(f"Space created: {repo_id}")
-        
+
+      # 4) Build an orphan deploy snapshot with Docker README + LFS
       - name: Prepare orphan deploy commit (NO heredoc; Docker README + LFS)
-        shell: bash
         run: |
           set -euo pipefail
-      
-          # Orphan branch so Space won't inherit your non-LFS history
+
+          # Orphan branch so Space won't inherit non-LFS history
           git checkout --orphan space-deploy
-      
+
           # Ensure README has Docker Space YAML (sdk + port)
           if ! grep -qE '^sdk:\s*docker' README.md 2>/dev/null; then
             tmp="$(mktemp)"
             printf '%s\n' \
-            '---' \
-            'title: Spring Gemini Chat (Docker)' \
-            'sdk: docker' \
-            'app_port: 7860' \
-            '---' \
-            '' > "$tmp"
+'---' \
+'title: Spring Gemini Chat (Docker)' \
+'sdk: docker' \
+'app_port: 7860' \
+'---' \
+'' > "$tmp"
             [ -f README.md ] && cat README.md >> "$tmp" || true
             mv "$tmp" README.md
           fi
-      
-          # Track images/binaries with LFS (expand globs if needed)
+
+          # Track images/binaries with LFS (HF requires LFS for binaries)
           git lfs track "screenshots/*.png"
           git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
           git add .gitattributes
-      
-          # >>> IMPORTANT: stage EVERYTHING (not just renormalize)
+
+          # >>> Stage EVERYTHING so the Space receives your full repo snapshot
           git add -A .
-      
-          # (optional) sanity logs
+
+          # Optional diagnostics
           echo "---- git status ----"
-          git status -s
+          git status -s || true
+          echo "---- sample files staged ----"
+          git ls-files | head -n 50 || true
           echo "---- LFS pointers ----"
           git lfs ls-files || true
-      
+
           # Ignore build outputs
           printf '%s\n' "target/" "*.log" >> .gitignore
           git add .gitignore
-      
+
           # Commit the deploy snapshot
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
+
+          echo "HEAD commit:"
+          git log --oneline -1
+
+      # 5) Push to Space (force first sync) and verify remote SHA
+      - name: Push to Space (force first sync + verify)
+        run: |
+          set -euo pipefail
+          SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
+          git remote remove space 2>/dev/null || true
+          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
+
+          echo "Local HEAD before push:"
+          git rev-parse HEAD
+
+          # First sync: push the orphan branch explicitly to remote main
+          git push --force space space-deploy:main
+
+          echo "Remote main after push (new SHA expected):"
+          git ls-remote --heads space refs/heads/main || true
