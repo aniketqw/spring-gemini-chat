@@ -1,8 +1,8 @@
-name: Deploy to NEW Hugging Face Space (Docker)
+name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]                 # change if your default branch differs
+    branches: [ master ]             # change if your default branch differs
   workflow_dispatch:
 
 jobs:
@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0                  # avoid shallow push issues
+          fetch-depth: 0             # avoid shallow push issues
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -32,9 +32,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: false
-
-      - name: Install Python deps (huggingface_hub + git-lfs)
+          lfs: false                 # we'll set LFS rules just for the deploy snapshot
+      - name: Install Python hub client + git-lfs
         run: |
           python -m pip install --upgrade pip
           python -m pip install "huggingface_hub>=0.23"
@@ -42,7 +41,7 @@ jobs:
           sudo apt-get install -y git-lfs
           git lfs install
 
-      - name: Create Space if missing (SDK=docker)
+      - name: Create Space if missing (SDK = docker)
         shell: python
         env:
           HF_TOKEN: ${{ env.HF_TOKEN }}
@@ -50,7 +49,7 @@ jobs:
           HF_SPACE: ${{ env.HF_SPACE }}
         run: |
           import os
-          from huggingface_hub import HfApi, hf_hub_url
+          from huggingface_hub import HfApi
           api = HfApi(token=os.environ["HF_TOKEN"])
           repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
           try:
@@ -60,18 +59,17 @@ jobs:
             api.create_repo(
               repo_id=repo_id,
               repo_type="space",
-              space_sdk="docker",   # ← ensure Docker Space
+              space_sdk="docker",   # <- make it a Docker Space
               private=False
             )
             print(f"Space created: {repo_id}")
 
-      - name: Prepare orphan deploy commit (with Docker README + LFS for images)
+      - name: Prepare orphan deploy commit (Docker README + LFS)
         run: |
           set -euo pipefail
 
-          # 1) Make sure Space README has Docker YAML front-matter
+          # 1) Ensure README has Docker Space YAML (sdk + port)
           if ! head -n 1 README.md | grep -q '^---$'; then
-            # Prepend a minimal YAML block if missing
             tmp="$(mktemp)"
             cat > "$tmp" <<'YAML'
 ---
@@ -87,20 +85,15 @@ YAML
           # 2) Start an orphan branch so Space won't inherit your non-LFS history
           git checkout --orphan space-deploy
 
-          # 3) Track typical image binaries with LFS (add more globs if needed)
+          # 3) Track images (and typical binaries) with LFS
           git lfs track "screenshots/*.png"
-          git lfs track "*.png"
-          git lfs track "*.jpg"
-          git lfs track "*.jpeg"
-          git lfs track "*.gif"
-          git lfs track "*.webp"
-
+          git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
           git add .gitattributes
 
-          # 4) Renormalize so tracked files become LFS pointers in this commit
+          # 4) Renormalize so tracked files become LFS pointers in THIS commit
           git add --renormalize .
 
-          # 5) Don’t ship build outputs
+          # 5) Ignore build outputs
           echo -e "target/\n*.log\n" >> .gitignore
           git add .gitignore
 
@@ -109,15 +102,15 @@ YAML
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
 
-      - name: Push to NEW Space (force first sync)
+      - name: Push to Space (force first sync)
         run: |
           set -euo pipefail
           SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
           git remote remove space 2>/dev/null || true
-          git remote add space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
+          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
-          # Optional: confirm we have LFS pointers
+          # Optional: list LFS tracked files (sanity)
           git lfs ls-files || true
 
-          # Push orphan snapshot as Space main (force is OK for first sync)
+          # First sync: force-push orphan snapshot to Space's main
           git push --force space HEAD:main
