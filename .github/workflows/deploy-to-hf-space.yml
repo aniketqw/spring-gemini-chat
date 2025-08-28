@@ -2,7 +2,7 @@ name: Deploy to Hugging Face Space (Docker)
 
 on:
   push:
-    branches: [ master ]             # change if your default branch differs
+    branches: [ master ]              # change if your default branch differs
   workflow_dispatch:
 
 jobs:
@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0             # avoid shallow push issues
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,15 +25,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      HF_USERNAME: ${{ vars.HF_USERNAME }}
-      HF_SPACE: ${{ vars.HF_SPACE }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}      # HF write token
+      HF_USERNAME: Phoenix21                  # or use GitHub vars
+      HF_SPACE: SpringGeminiChat              # or a new space name
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: false                 # we'll set LFS rules just for the deploy snapshot
-      - name: Install Python hub client + git-lfs
+          lfs: false
+
+      - name: Install hub client + git-lfs
         run: |
           python -m pip install --upgrade pip
           python -m pip install "huggingface_hub>=0.23"
@@ -59,35 +60,37 @@ jobs:
             api.create_repo(
               repo_id=repo_id,
               repo_type="space",
-              space_sdk="docker",   # <- make it a Docker Space
+              space_sdk="docker",   # ensure a Docker Space
               private=False
             )
             print(f"Space created: {repo_id}")
 
       - name: Prepare orphan deploy commit (Docker README + LFS)
+        shell: bash
         run: |
           set -euo pipefail
 
-          # 1) Ensure README has Docker Space YAML (sdk + port)
-          if ! head -n 1 README.md | grep -q '^---$'; then
+          # 1) Ensure README has the Docker YAML front matter
+          if ! grep -qE '^sdk:\s*docker' README.md 2>/dev/null; then
             tmp="$(mktemp)"
-            cat > "$tmp" <<'YAML'
----
-title: Spring Gemini Chat (Docker)
-sdk: docker
-app_port: 7860
----
-YAML
+            # Use printf (no heredoc) to avoid YAML token issues
+            printf '%s\n' \
+'---' \
+'title: Spring Gemini Chat (Docker)' \
+'sdk: docker' \
+'app_port: 7860' \
+'---' \
+'' > "$tmp"
             cat README.md >> "$tmp"
             mv "$tmp" README.md
           fi
 
-          # 2) Start an orphan branch so Space won't inherit your non-LFS history
+          # 2) Start an orphan branch so Space won't inherit non-LFS history
           git checkout --orphan space-deploy
 
-          # 3) Track images (and typical binaries) with LFS
+          # 3) Track images/binaries with LFS (expand globs as needed)
           git lfs track "screenshots/*.png"
-          git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
+          git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip"
           git add .gitattributes
 
           # 4) Renormalize so tracked files become LFS pointers in THIS commit
@@ -103,14 +106,15 @@ YAML
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
 
       - name: Push to Space (force first sync)
+        shell: bash
         run: |
           set -euo pipefail
           SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
           git remote remove space 2>/dev/null || true
           git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${SPACE_PATH}"
 
-          # Optional: list LFS tracked files (sanity)
+          # Optional: show which files are LFS
           git lfs ls-files || true
 
-          # First sync: force-push orphan snapshot to Space's main
+          # First sync: force push orphan snapshot to Space's main
           git push --force space HEAD:main
