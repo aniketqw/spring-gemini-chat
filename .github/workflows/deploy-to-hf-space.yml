@@ -69,46 +69,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
+      
           # 0) Orphan branch so Space won't inherit non-LFS history
           git checkout --orphan space-deploy
-
+      
           # 1) Ensure README has Docker Space YAML (sdk + port)
           if ! grep -qE '^sdk:\s*docker' README.md 2>/dev/null; then
             tmp="$(mktemp)"
             # Use printf instead of heredoc to avoid parser issues
             printf '%s\n' \
-'---' \
-'title: Spring Gemini Chat (Docker)' \
-'sdk: docker' \
-'app_port: 7860' \
-'---' \
-'' > "$tmp"
-            [ -f README.md ] && cat README.md >> "$tmp" || true
-            mv "$tmp" README.md
-          fi
-
+            '---' \
+            'title: Spring Gemini Chat (Docker)' \
+            'sdk: docker' \
+            'app_port: 7860' \
+            '---' \
+            '' > "$tmp"
+                  [ -f README.md ] && cat README.md >> "$tmp" || true
+                  mv "$tmp" README.md
+                fi
+      
           # 2) Track images/binaries with LFS (expand globs if needed)
           git lfs track "screenshots/*.png"
           git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.zip" "*.jar"
           git add .gitattributes
-
+      
           # 3) Renormalize so tracked files become LFS pointers in THIS commit
           git add --renormalize .
-
+      
           # 4) Ignore build outputs
           echo -e "target/\n*.log\n" >> .gitignore
           git add .gitignore
-
+      
           # 5) Commit the deploy snapshot
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "Space deploy: orphan commit with Docker config + LFS pointers"
-
-      - name: Push to Space (force first sync)
-        shell: bash
-        run: |
-          set -euo pipefail
-          SPACE_PATH="${HF_USERNAME}/${HF_SPACE}"
-          git remote remove space 2>/dev/null || true
-          git remote add    space "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces
